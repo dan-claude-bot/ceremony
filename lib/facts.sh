@@ -19,6 +19,7 @@
 #   EVENT_BEFORE        github.event.before — may be empty or all-zeros
 #   GITHUB_REPOSITORY   for the two API facts
 #   GH_TOKEN            for gh (unused when no API state is consulted)
+#   CEREMONY_LABEL_RETRY_SECONDS  lib/labeled.sh's pause between reads (#628)
 #
 # The API calls run only in the states that consult them (decide tolerates
 # empty facts — issue #8): RELEASED only for a bare unchanged version,
@@ -117,18 +118,12 @@ if ! version_is_dev "$ver"; then
       released=no
     fi
   else
-    # The sources' exact jq: merged PRs only, `release` among the label
-    # names. Read via the API because a push event carries no PR payload —
-    # and the PR itself lives on a fork (the trigger comment in the
-    # workflow). A failed API call reads as "no label", which row 5
-    # refuses: fail-closed.
-    if gh api "repos/$GITHUB_REPOSITORY/commits/$MERGE_SHA/pulls" \
-        -q '[.[] | select(.merged_at != null) | .labels[].name] | index("release") != null' \
-        | grep -qx true; then
-      labeled=yes
-    else
-      labeled=no
-    fi
+    # Read via the API because a push event carries no PR payload — and
+    # the PR itself lives on a fork (the trigger comment in the workflow).
+    # lib/labeled.sh retries an empty answer and falls back to a search
+    # before it reads `no` (#628); `no` — or the script failing outright —
+    # is what row 5 refuses: fail-closed.
+    labeled="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/labeled.sh")" || labeled=no
   fi
 fi
 

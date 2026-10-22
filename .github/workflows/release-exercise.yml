@@ -137,12 +137,14 @@ jobs:
         # consumes the tool end to end instead of hand-writing its output.
         # Same shape as test/release-chain.test.sh. The gh stub answers the
         # one API fact the ceremony path consults (the merged
-        # release-labeled PR) so nothing here talks to GitHub.
+        # release-labeled PR), as the association API answers it — a JSON
+        # array that lib/labeled.sh reads (#628) — so nothing here talks to
+        # GitHub.
         run: |
           mkdir -p "$RUNNER_TEMP/stub"
           cat > "$RUNNER_TEMP/stub/gh" <<'EOF'
           #!/usr/bin/env bash
-          if [ "$1" = api ]; then echo true; exit 0; fi
+          if [ "$1" = api ]; then echo '[{"number":1,"merged_at":"2026-01-01T00:00:00Z","labels":[{"name":"release"}]}]'; exit 0; fi
           if [ "$1" = release ] && [ "$2" = create ]; then
             tag="$3"
             shift 3

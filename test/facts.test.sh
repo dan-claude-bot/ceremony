@@ -25,11 +25,22 @@ cat >"$TMP/stub/gh" <<'EOF'
 #!/usr/bin/env bash
 case "${GH_STUB:-none}" in
   labeled-yes | labeled-no)
-    if [ "$1" != api ]; then
-      echo "gh stub: expected an api call, got: gh $*" >&2
-      exit 97
-    fi
-    [ "${GH_STUB}" = labeled-yes ] && echo true || echo false
+    # lib/labeled.sh (#628): the association read answers a JSON array;
+    # `no` reads it three times, then searches (no match there either).
+    case "$1 ${2:-}" in
+      "api "*)
+        if [ "${GH_STUB}" = labeled-yes ]; then
+          echo '[{"number":1,"merged_at":"2026-01-01T00:00:00Z","labels":[{"name":"release"}]}]'
+        else
+          echo '[{"number":1,"merged_at":"2026-01-01T00:00:00Z","labels":[{"name":"bug"}]}]'
+        fi
+        ;;
+      "pr list") echo '[]' ;;
+      *)
+        echo "gh stub: expected an api or pr list call, got: gh $*" >&2
+        exit 97
+        ;;
+    esac
     ;;
   released-yes | released-no)
     if [ "$1" != release ]; then
@@ -76,7 +87,7 @@ facts_in() {
   local dir="$1"
   shift
   (cd "$TMP/$dir" \
-    && env PATH="$TMP/stub:$PATH" GITHUB_REPOSITORY=fixture/fixture GH_TOKEN=stub \
+    && env PATH="$TMP/stub:$PATH" GITHUB_REPOSITORY=fixture/fixture GH_TOKEN=stub CEREMONY_LABEL_RETRY_SECONDS=0 \
       "$@" bash "$FACTS")
 }
 
