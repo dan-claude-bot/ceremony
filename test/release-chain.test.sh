@@ -19,11 +19,12 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # A gh stub for the one API fact the ceremony path needs: the merged,
-# release-labeled PR behind the commit.
+# release-labeled PR behind the commit, as the association API answers it
+# (lib/labeled.sh reads the body, #628).
 mkdir -p "$TMP/stub"
 cat >"$TMP/stub/gh" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1" = api ]; then echo true; exit 0; fi
+if [ "$1" = api ]; then echo '[{"number":1,"merged_at":"2026-01-01T00:00:00Z","labels":[{"name":"release"}]}]'; exit 0; fi
 echo "gh stub: unexpected call: gh $*" >&2
 exit 97
 EOF
@@ -77,7 +78,7 @@ chain() {
   (
     cd "${3:-$TMP/repo}" || exit 1
     facts_out="$(env PATH="${4:-$TMP/stub}:$PATH" GITHUB_REPOSITORY=fixture/fixture \
-      GH_TOKEN=stub VERSION_SOURCE=file MERGE_SHA="$1" EVENT_BEFORE="$2" \
+      GH_TOKEN=stub CEREMONY_LABEL_RETRY_SECONDS=0 VERSION_SOURCE=file MERGE_SHA="$1" EVENT_BEFORE="$2" \
       bash "$FACTS")" || exit 1
     printf '%s\n' "$facts_out"
     ver="$(printf '%s\n' "$facts_out" | awk -F= '$1 == "ver" { print $2 }')"
@@ -177,11 +178,13 @@ check "the greenfield no-op is a NOTICE" 0 "NOTICE:" \
 # A bare first commit with no merged release-labeled PR must still refuse —
 # the reason the crash could not be `|| true`-ed away: a greenfield adoption
 # must never become a silent release. This stub answers the labeled query
-# with false.
+# with a merged pull request carrying no release label, and the search
+# (#628) with nothing.
 mkdir -p "$TMP/stub-unlabeled"
 cat >"$TMP/stub-unlabeled/gh" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1" = api ]; then echo false; exit 0; fi
+if [ "$1" = api ]; then echo '[{"number":1,"merged_at":"2026-01-01T00:00:00Z","labels":[{"name":"bug"}]}]'; exit 0; fi
+if [ "$1 ${2:-}" = "pr list" ]; then echo '[]'; exit 0; fi
 echo "gh stub: unexpected call: gh $*" >&2
 exit 97
 EOF
