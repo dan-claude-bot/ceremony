@@ -55,6 +55,7 @@ scope:release-flow:
           - drills/**
           - test/decide.test.sh
           - test/facts.test.sh
+          - test/labeled.test.sh
           - test/release-chain.test.sh
           - test/release-dispatch.test.sh
           - test/version.test.sh
