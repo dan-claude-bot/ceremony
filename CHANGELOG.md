@@ -12,6 +12,13 @@ Entries arrive as fragments — one `changelog.d/<issue>.md` per PR, never
 an edit to this file — and the release PR assembles them into the next
 section here (`bin/changelog-assemble`, #112).
 
+## 0.7.12 — 2026-11-20
+
+### Fixed
+
+- An rc's release notes are only the fragments added since the previous rc of its version (found by tag), opened by a line linking to every entry. The first rc publishes them all (#635).
+- Release notes are capped at 120,000 bytes, under GitHub's limit, and a cut ends with a link to the full entries, so a long rc series no longer fails the publish with HTTP 422 (#635).
+
 ## 0.7.11 — 2026-10-22
 
 ### Fixed
