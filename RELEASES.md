@@ -48,9 +48,12 @@ separate version epics. Their worked ladder is
 `X.Y.Z-dev` → `X.Y.Z-rc1` → `X.Y.Z-rc2-dev` → `X.Y.Z-rc2` → … →
 `X.Y.Z`. Each candidate is a tag-only cut: its ceremony PR changes the
 version to the bare `X.Y.Z-rcN` and adds `drills/X.Y.Z-rcN.md`, but leaves
-`CHANGELOG.md` and every fragment untouched. The release doors assemble the
-surviving fragments into cumulative notes, publish the candidate with
-`--prerelease`, and the merge door deterministically re-arms main as
+`CHANGELOG.md` and every fragment untouched. The release doors publish the
+candidate with `--prerelease`. Its notes are the fragments added since the
+previous candidate's tag, opened by a line that names that tag and links to
+every surviving fragment; the first candidate publishes them all. Every
+release's notes are capped under GitHub's body limit and end with that link
+when cut (#635). The merge door deterministically re-arms main as
 `X.Y.Z-rc(N+1)-dev`. Repeat those steps for each candidate. Promotion to
 `X.Y.Z` is the ordinary final ceremony: assemble and stamp the final section,
 consume the fragments, publish the final release, and re-arm the next patch
