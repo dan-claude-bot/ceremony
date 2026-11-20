@@ -482,7 +482,7 @@ issue_probe() { # $1 issue, $2 labels, $3 assignees, $4 false|closing|refs, $5 r
 
 tfix() { printf '%s/repos_owner_repo_issues_%s_timeline.json' "$TMP" "$1"; }
 cfix() { printf '%s/repos_owner_repo_issues_%s_comments.json' "$TMP" "$1"; }
-# shellcheck disable=SC2317 # invoked indirectly by the check harness
+# shellcheck disable=SC2317,SC2329 # invoked indirectly by the check harness
 line_count() { wc -l <"$1"; }
 files_absent() { [ ! -f "$1" ] && [ ! -f "$2" ]; }
 # -- the derived owner class (#562) -----------------------------------------
@@ -524,7 +524,7 @@ closed_probe() { # $1 issue, $2 labels, $3 assignee count
     ISSUE_LABELS="$2"
     ISSUE_JSON="$(jq -n --argjson assignees "$assignees" '{assignees:$assignees}')"
     run() { "$@"; }
-    # shellcheck disable=SC2317 # invoked indirectly by reconcile_closed_issue
+    # shellcheck disable=SC2317,SC2329 # invoked indirectly by reconcile_closed_issue
     gh() { issue_stub_gh "$@"; }
     reconcile_closed_issue "$1"
   )
@@ -999,7 +999,7 @@ jq -n --arg at "$(iso_at $((INOW - 3600)))" \
   '[{"event":"assigned","created_at":$at}]' >"$(tfix 109)"
 clock_read() { # $1 clock fn — both against fixture 109
   ( REPO=owner/repo
-    # shellcheck disable=SC2317 # reached indirectly, through the clock under test
+    # shellcheck disable=SC2317,SC2329 # reached indirectly, through the clock under test
     gh() { issue_stub_gh "$@"; }
     "$1" 109 "$(iso_at $((INOW - 10 * 86400)))" )
 }
@@ -1164,7 +1164,7 @@ jq -n --arg l "$(iso_at $((INOW - 8 * 86400)))" \
   >"$(tfix 125)"
 clock_read_125() { # $1 clock fn
   ( REPO=owner/repo
-    # shellcheck disable=SC2317 # reached indirectly, through the clock under test
+    # shellcheck disable=SC2317,SC2329 # reached indirectly, through the clock under test
     gh() { issue_stub_gh "$@"; }
     "$1" 125 "$(iso_at $((INOW - 10 * 86400)))" )
 }
@@ -1619,7 +1619,7 @@ COMMIT_FIXTURE_BODY="$(printf '%s\n' \
 commit_probe() { # $1 = issue, $2 = write-fail glob (empty = every write lands)
   (
     REPO=owner/repo
-    # shellcheck disable=SC2317 # reached through the staged effects' gh calls
+    # shellcheck disable=SC2317,SC2329 # reached through the staged effects' gh calls
     gh() { issue_stub_gh "$@"; }
     ISSUE_STUB_WRITE_FAILS="${2:-}"
     STAGING=true
@@ -2177,7 +2177,7 @@ check "the failed dependency read never accuses the declaration" 1 "" \
 dependency_state_probe() {
   (
     REPO=owner/repo
-    # shellcheck disable=SC2317 # reached indirectly by reference_states
+    # shellcheck disable=SC2317,SC2329 # reached indirectly by reference_states
     gh() { issue_stub_gh "$@"; }
     local states=""
     reference_states 75 states <<<"76"

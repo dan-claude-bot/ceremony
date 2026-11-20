@@ -1782,7 +1782,7 @@ boot_missing_probe() {
   (
     REPO=owner/repo LABELS_CONF=.github/labels.conf
     run() { "$@"; }
-    # shellcheck disable=SC2317 # reached through run's "$@", opaque to shellcheck
+    # shellcheck disable=SC2317,SC2329 # reached through run's "$@", opaque to shellcheck
     gh() {
       if [ "$1" = label ] && [ "$2" = delete ]; then
         printf '%s\n' "$3" >>"$BOOT/missing-deletes"
@@ -1806,7 +1806,7 @@ boot_refusal_probe() {
   (
     REPO=owner/repo LABELS_CONF=.github/labels.conf
     run() { "$@"; }
-    # shellcheck disable=SC2317 # reached through run's "$@", opaque to shellcheck
+    # shellcheck disable=SC2317,SC2329 # reached through run's "$@", opaque to shellcheck
     gh() {
       if [ "$1" = label ] && [ "$2" = delete ]; then
         if [ "$3" = question ]; then
@@ -1838,7 +1838,7 @@ expect "...and the log names the refused label" \
 boot_dry_probe() {
   (
     REPO=owner/repo LABELS_CONF=.github/labels.conf DRY_RUN=1
-    # shellcheck disable=SC2317 # reached through run's "$@", opaque to shellcheck
+    # shellcheck disable=SC2317,SC2329 # reached through run's "$@", opaque to shellcheck
     gh() { printf '%s\n' "$*" >>"$BOOT/dry-real"; }
     bootstrap_labels
   )

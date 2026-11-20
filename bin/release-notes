@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# The notes a release publishes (#635), for both doors.
+#
+#   release-notes <version> [--changelog <file>] [--dir <dir>]
+#                 [--tag-prefix <prefix>] [--since <ref>] [--remote <name>]
+#                 [--limit <bytes>] [--full-url <url>]
+#
+# A final release publishes its stamped '## <version>' section. An rc
+# publishes the changelog.d/ fragments added since the previous rc of the
+# same base version. Fragments live until the final release consumes them,
+# so the old notes (every surviving fragment) grew with every rc until
+# GitHub refused the body (HTTP 422, its 125,000-character limit). The first
+# rc of a version, or one whose previous tag cannot be found, publishes every
+# fragment, which is the old behaviour.
+#
+# Whatever the source, the notes are capped at --limit bytes (default
+# 120000, under GitHub's 125,000 characters: a character is at least one
+# byte). Notes over the cap are cut at a line boundary and end with a
+# pointer to --full-url, so a release is never refused for its prose.
+#
+# The whole fragment set is still validated by `changelog-assemble --check`
+# first. A malformed fragment refuses the release exactly as before.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/changelog.sh
+source "$ROOT/lib/changelog.sh"
+# shellcheck source=lib/version.sh
+source "$ROOT/lib/version.sh"
+
+usage() {
+  echo "usage: release-notes <version> [--changelog <file>] [--dir <dir>] [--tag-prefix <prefix>] [--since <ref>] [--remote <name>] [--limit <bytes>] [--full-url <url>]" >&2
+  exit 2
+}
+
+refuse() {
+  printf 'release-notes: %s\n' "$1" >&2
+  exit 1
+}
+
+ver=""
+changelog="CHANGELOG.md"
+dir="changelog.d"
+prefix=""
+since=""
+since_given=0
+remote="origin"
+limit=120000
+full_url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --changelog | --dir | --tag-prefix | --since | --remote | --limit | --full-url)
+      [ $# -ge 2 ] || usage
+      case "$1" in
+        --changelog) changelog="$2" ;;
+        --dir) dir="$2" ;;
+        --tag-prefix) prefix="$2" ;;
+        --since) since="$2"; since_given=1 ;;
+        --remote) remote="$2" ;;
+        --limit) limit="$2" ;;
+        --full-url) full_url="$2" ;;
+      esac
+      shift 2
+      ;;
+    -*) usage ;;
+    *)
+      [ -z "$ver" ] || usage
+      ver="$1"
+      shift
+      ;;
+  esac
+done
+[ -n "$ver" ] || usage
+if ! [[ "$limit" =~ ^[0-9]+$ ]] || [ "$limit" -lt 1000 ]; then
+  refuse "--limit must be a whole number of bytes, 1000 or more (got '$limit')"
+fi
+
+# previous_rc <prefix> <base> <n> — the highest '<prefix><base>-rcM' tag on
+# the remote with M < n (print), or nothing.
+previous_rc() {
+  local p="$1" base="$2" n="$3" best="" best_m=0 ref name m
+  while IFS=$'\t' read -r _ ref; do
+    name="${ref#refs/tags/}"
+    name="${name%^\{\}}"
+    case "$name" in
+      "$p$base"-rc*) ;;
+      *) continue ;;
+    esac
+    m="${name#"$p$base"-rc}"
+    [[ "$m" =~ ^[0-9]+$ ]] || continue
+    if [ "$m" -lt "$n" ] && [ "$m" -gt "$best_m" ]; then
+      best="$name"
+      best_m="$m"
+    fi
+  done < <(git ls-remote --tags "$remote" "refs/tags/$p$base-rc*" 2>/dev/null || true)
+  [ -n "$best" ] && printf '%s\n' "$best"
+  return 0
+}
+
+# cap <file> — cut the notes to the limit at a line boundary, with the pointer.
+cap() {
+  local file="$1" size note keep
+  size="$(wc -c <"$file" | tr -d ' ')"
+  [ "$size" -le "$limit" ] && return 0
+  if [ -n "$full_url" ]; then
+    note="These notes were cut to fit GitHub's limit on a release body. Every entry: $full_url"
+  else
+    note="These notes were cut to fit GitHub's limit on a release body. Every entry is in the repository's changelog."
+  fi
+  keep=$((limit - ${#note} - 16))
+  {
+    # The last line read may be cut mid-way, so it is dropped.
+    head -c "$keep" "$file" | awk 'NR > 1 { print prev } { prev = $0 }'
+    printf '\n…\n\n%s\n' "$note"
+  } >"$file.cut"
+  mv "$file.cut" "$file"
+  printf 'release-notes: cut the notes from %s to %s bytes (limit %s)\n' "$size" "$(wc -c <"$file" | tr -d ' ')" "$limit" >&2
+}
+
+out="$(mktemp)"
+work="$(mktemp -d)"
+trap 'rm -rf "$out" "$out.cut" "$work"' EXIT
+
+if ! version_is_rc "$ver"; then
+  if ! diagnosis="$(changelog_section_problem "$changelog" "$ver")"; then
+    printf '%s\n' "$diagnosis" >&2
+    refuse "$changelog has no '## $ver' section — the release PR must stamp it; refusing to publish an empty release"
+  fi
+  changelog_section "$changelog" "$ver" >"$out"
+  cap "$out"
+  cat "$out"
+  exit 0
+fi
+
+# rc: validate the whole set (and get its body) the way the doors always did.
+bash "$ROOT/bin/changelog-assemble" "$ver" --check --changelog "$changelog" --dir "$dir" >"$out"
+
+base="${ver%-rc*}"
+n="${ver##*-rc}"
+if [ "$since_given" = 0 ]; then
+  since="$(previous_rc "$prefix" "$base" "$n")"
+fi
+
+if [ -n "$since" ]; then
+  if ! git rev-parse -q --verify "refs/tags/$since^{commit}" >/dev/null 2>&1 \
+    && ! git rev-parse -q --verify "$since^{commit}" >/dev/null 2>&1; then
+    git fetch -q --no-tags --depth=1 "$remote" "+refs/tags/$since:refs/tags/$since" 2>/dev/null || true
+  fi
+  if git rev-parse -q --verify "$since^{commit}" >/dev/null 2>&1; then
+    # The fragments that were already there at the previous rc were published
+    # by it (or an earlier one). Only new names are this rc's.
+    known="$(git ls-tree --name-only "$since" -- "$dir/" 2>/dev/null | sed 's#.*/##')"
+    mkdir -p "$work/changelog.d"
+    [ -f "$dir/shape" ] && cp "$dir/shape" "$work/changelog.d/shape"
+    fresh=0
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      if ! grep -qxF -- "${f##*/}" <<<"$known"; then
+        cp -- "$f" "$work/changelog.d/"
+        fresh=$((fresh + 1))
+      fi
+    done <<<"$(changelog_fragments "$dir")"
+    if [ -n "$full_url" ]; then
+      lead="Changes since \`$since\`. Every entry for $base so far: $full_url"
+    else
+      lead="Changes since \`$since\`."
+    fi
+    if [ "$fresh" -eq 0 ]; then
+      printf '%s\n\nNo new changelog entries since %s.\n' "$lead" "\`$since\`" >"$out"
+    else
+      if ! body="$(changelog_assemble "$work/changelog.d")"; then
+        refuse "$body"
+      fi
+      printf '%s\n\n%s\n' "$lead" "$body" >"$out"
+    fi
+    printf 'release-notes: %s — %d fragment(s) new since %s\n' "$ver" "$fresh" "$since" >&2
+  else
+    printf 'release-notes: %s — previous rc %s could not be read; publishing every fragment\n' "$ver" "$since" >&2
+  fi
+else
+  printf 'release-notes: %s — no previous rc of %s; publishing every fragment\n' "$ver" "$base" >&2
+fi
+
+cap "$out"
+cat "$out"
