@@ -168,8 +168,9 @@ check "over-limit notes are cut to the limit" 0 "" test "$size" -le 20000
 check "the cut notes are still most of the limit" 0 "" test "$size" -ge 19000
 check "the cut notes end with the link to every entry" 0 "Every entry: https://x.test/full" printf '%s' "$(printf '%s\n' "$out" | tail -n 1)"
 check "the cut is logged" 0 "cut the notes from" cat "$TMP/big.err"
-check "the cut lands on a whole entry: every kept line ends its fragment" 0 "" \
-  bash -c 'printf "%s\n" "$1" | grep "^- Entry" | grep -vq "(#[0-9]*)\.$" && exit 1 || exit 0' _ "$out"
+# A cut entry would be an '- Entry' line that doesn't end with its '(#n).'.
+partial="$(printf '%s\n' "$out" | grep '^- Entry' | grep -cv '(#[0-9]*)\.$')"
+check "the cut lands on a whole entry: every kept line ends its fragment" 0 "" test "$partial" -eq 0
 out="$(notes big 9.0.0-rc1 2>/dev/null)"
 size="$(printf '%s\n' "$out" | wc -c | tr -d ' ')"
 check "the default limit keeps 120 KB of notes whole" 0 "" test "$size" -lt 120000
