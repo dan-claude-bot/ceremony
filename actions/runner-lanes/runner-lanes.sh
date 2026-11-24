@@ -55,7 +55,20 @@ for key in ul:untrusted-labels uv:untrusted-vars dl:deploy-labels dv:deploy-vars
 done
 
 # to_json <file> — the file as JSON, anchors resolved; non-zero on a parse error.
-to_json() { yq -o=json 'explode(.)' "$1" 2>&1; }
+# yq's stderr is kept out of the JSON (a newer yq warns there about merge
+# keys) and shown only when the parse fails.
+to_json() {
+  local err out
+  err="$(mktemp)"
+  if out="$(yq -o=json 'explode(.)' "$1" 2>"$err")"; then
+    rm -f "$err"
+    printf '%s\n' "$out"
+  else
+    cat "$err"
+    rm -f "$err"
+    return 1
+  fi
+}
 
 # scan <json> <mode> [lane input] — the jq records for one file.
 scan() {
