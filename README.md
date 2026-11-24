@@ -193,16 +193,18 @@ refuse (#1 constraint 8).
 
 ## The guards
 
-[`actions/`](actions/) holds eleven composite actions. Three belong to the
+[`actions/`](actions/) holds twelve composite actions. Three belong to the
 label machine named above and are not the operator's business here. Of the
-remaining eight, a consumer's own `ci.yml` carries **six** guard steps —
+remaining nine, a consumer's own `ci.yml` carries **seven** guard steps —
 `changelog-armed`, `changelog-monotonic`, `changelog-assembled`,
 `drill-recorded` and [`runner-isolated`](actions/runner-isolated/), the last
 asserting that no workflow file which executes PR-authored code names a
 self-hosted runner the consumer has not vouched for (#58, #395), and
 [`sha-pinned`](actions/sha-pinned/), which rejects third-party action and
 reusable-workflow references that are not full commit SHAs with readable
-version comments (#399) — plus
+version comments (#399), and [`runner-lanes`](actions/runner-lanes/), which
+holds untrusted-lane jobs to read-only tokens with no secrets and deploy-lane
+jobs to bare `run:` steps (#640) — plus
 [`refs-not-closing`](actions/refs-not-closing/) in its
 own [`refs-guard.yml`](.github/workflows/refs-guard.yml) caller, because
 body edits are load-bearing there (#200, #218), and

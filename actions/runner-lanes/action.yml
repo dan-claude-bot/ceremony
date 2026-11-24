@@ -1,0 +1,81 @@
+name: Runner lanes
+description: >-
+  Check the two runner-lane rules over the consumer's workflow files (#640;
+  handbook 0004 decision ask 4, lanes per 0012). Untrusted-lane jobs declare
+  read-only `permissions:` (job level, or workflow level when the job sets
+  none), reference no `secrets.*` but `GITHUB_TOKEN` (workflow-level `env:`
+  included), and set no `environment:`. Deploy-lane jobs have no `uses:`
+  steps (checkout included), no `container:`/`services:`, no container
+  tool and no code fetch (`git clone|fetch|pull`, `curl|wget … | sh`) in
+  `run:` or `shell:`. A job's lane is read from its `runs-on:` (scalar, list, or the
+  `labels:`/`group:` of a mapping): a literal label matching a lane's label
+  globs, or a `vars.<NAME>` reference matching a lane's variable globs, and
+  a single-quoted literal inside an expression is read as a label too. A
+  JSON-list string (`'["self-hosted","untrusted"]'`) names its elements. A
+  reusable-workflow caller is classified by its runner input; an untrusted
+  caller must hold read-only permissions and pass no secrets, a local
+  callee (`./`) is followed one level and its jobs routed through
+  `inputs.<runner>` (or `inputs['<runner>']`) take the caller's lane, a
+  callee job whose runs-on is an expression naming neither fails and one
+  on its own literal runner is a NOTE, a caller with no runner input is
+  read from all its `with:` values (a NOTE when none names a lane), a job
+  with neither `runs-on:` nor `uses:` fails, and a deploy-lane caller of a
+  remote callee fails, since the guard cannot read its steps. A
+  `matrix.<key>` in `runs-on:` is read from the literal values
+  `strategy.matrix` and its `include:` give that key. Known gaps, so
+  silence is never read as coverage: an expression that yields no lane
+  (inputs, a non-lane variable, a computed matrix) is printed as a NOTE
+  and not judged, a
+  remote callee on the untrusted lane is judged on the caller side only,
+  callers inside a callee are not followed further, and container tools
+  (`docker`, `docker-compose`, `dockerd`, `podman`, `nerdctl`, `buildah`,
+  `containerd`, `ctr`, `crictl`, `skopeo`, `kubectl`, `incus`, `lxc`) and
+  code fetches are matched
+  lexically in `run:` and `shell:` text (step, job and workflow
+  `defaults`), so an indirect or obfuscated call is not seen and a mention
+  in an echo or comment fails. A `secrets.` inside an expression is judged
+  a secret even inside a string literal: conservative by design. Needs `yq` (v4) and `jq` on the runner; a missing one fails.
+  A missing default workflows directory passes; a missing non-default
+  one fails, and an empty lane or runner input is refused.
+inputs:
+  workflows-dir:
+    description: Directory whose direct `*.yml`/`*.yaml` children are scanned.
+    required: false
+    default: .github/workflows
+  untrusted-labels:
+    description: Comma-separated label globs (`*` only) that put a job on the untrusted lane.
+    required: false
+    default: untrusted,pr-runner,gig-untrusted,gig-untrusted-*
+  untrusted-vars:
+    description: >-
+      Comma-separated variable-name globs whose `vars.<NAME>` in `runs-on:`
+      puts a job on the untrusted lane; a flavor lane is `<VAR>_<FLAVOR>`.
+    required: false
+    default: LANE_UNTRUSTED,LANE_UNTRUSTED_*
+  deploy-labels:
+    description: Comma-separated label globs that put a job on the deploy lane.
+    required: false
+    default: deploy-runner,gig-trusted-deploy
+  deploy-vars:
+    description: Comma-separated variable-name globs that put a job on the deploy lane (flavors as `<VAR>_<FLAVOR>`).
+    required: false
+    default: LANE_TRUSTED_DEPLOY,LANE_TRUSTED_DEPLOY_*
+  runner-inputs:
+    description: >-
+      Comma-separated `with:` input names a reusable-workflow caller passes
+      its runner through (ceremony's reusable workflows take `runner`).
+    required: false
+    default: runner
+runs:
+  using: composite
+  steps:
+    - name: runner lanes
+      shell: bash
+      env:
+        WORKFLOWS_DIR: ${{ inputs.workflows-dir }}
+        UNTRUSTED_LABELS: ${{ inputs.untrusted-labels }}
+        UNTRUSTED_VARS: ${{ inputs.untrusted-vars }}
+        DEPLOY_LABELS: ${{ inputs.deploy-labels }}
+        DEPLOY_VARS: ${{ inputs.deploy-vars }}
+        RUNNER_INPUTS: ${{ inputs.runner-inputs }}
+      run: bash "$GITHUB_ACTION_PATH/runner-lanes.sh"
