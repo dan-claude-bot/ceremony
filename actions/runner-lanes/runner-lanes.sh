@@ -39,7 +39,7 @@ cfg="$(jq -cn \
   --argjson ul "$(globs "${UNTRUSTED_LABELS-untrusted,pr-runner,gig-untrusted,gig-untrusted-*}")" \
   --argjson uv "$(globs "${UNTRUSTED_VARS-LANE_UNTRUSTED,LANE_UNTRUSTED_*}")" \
   --argjson dl "$(globs "${DEPLOY_LABELS-deploy-runner,gig-trusted-deploy}")" \
-  --argjson dv "$(globs "${DEPLOY_VARS-LANE_TRUSTED_DEPLOY}")" \
+  --argjson dv "$(globs "${DEPLOY_VARS-LANE_TRUSTED_DEPLOY,LANE_TRUSTED_DEPLOY_*}")" \
   --argjson inputs "$(globs "${RUNNER_INPUTS-runner}")" \
   '{ul: $ul, uv: $uv, dl: $dl, dv: $dv, inputs: $inputs}')"
 if [ "$(jq -r '.inputs | length' <<<"$cfg")" -eq 0 ]; then
@@ -93,7 +93,11 @@ follow() { # <file> <job> <lane> <callee> <input>
     return
   fi
   local records
-  records="$(scan "$json" callee "$lane" "$input")"
+  if ! records="$(scan "$json" callee "$lane" "$input" 2>&1)"; then
+    failures=$((failures + 1))
+    log "FAIL $path: could not be judged (unexpected shape): $records"
+    return
+  fi
   report "$path" "$records" "$job → "
 }
 
@@ -103,7 +107,11 @@ for file in "${files[@]}"; do
     log "FAIL $file: does not parse as YAML: $json"
     continue
   fi
-  records="$(scan "$json" top)"
+  if ! records="$(scan "$json" top 2>&1)"; then
+    failures=$((failures + 1))
+    log "FAIL $file: could not be judged (unexpected shape): $records"
+    continue
+  fi
   report "$file" "$records"
 done
 

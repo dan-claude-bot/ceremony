@@ -15,13 +15,19 @@ description: >-
   caller must hold read-only permissions and pass no secrets, a local
   callee (`./`) is followed one level and its jobs routed through
   `inputs.<runner>` take the caller's lane, and a deploy-lane caller of a
-  remote callee fails, since the guard cannot read its steps. Known gaps,
-  so silence is never read as coverage: an expression naming no variable
-  or literal (matrix, inputs) is printed as a NOTE and not judged, a
+  remote callee fails, since the guard cannot read its steps. A
+  `matrix.<key>` in `runs-on:` is read from the literal values
+  `strategy.matrix` and its `include:` give that key. Known gaps, so
+  silence is never read as coverage: an expression that yields no lane
+  (inputs, a non-lane variable, a computed matrix) is printed as a NOTE
+  and not judged, a
   remote callee on the untrusted lane is judged on the caller side only,
-  callers inside a callee are not followed further, and `docker` is found
-  by word in `run:` text, so an indirect call (a script that runs docker)
-  is not seen. Needs `yq` (v4) and `jq` on the runner; a missing one fails.
+  callers inside a callee are not followed further, and container tools
+  (`docker`, `docker-compose`, `podman`, `nerdctl`, `buildah`) are matched
+  lexically in `run:` and `shell:` text (step, job and workflow
+  `defaults`), so an indirect or obfuscated call is not seen and a mention
+  in an echo or comment fails. A `secrets.` inside an expression is judged
+  a secret even inside a string literal: conservative by design. Needs `yq` (v4) and `jq` on the runner; a missing one fails.
   A missing workflows directory passes.
 inputs:
   workflows-dir:
@@ -43,9 +49,9 @@ inputs:
     required: false
     default: deploy-runner,gig-trusted-deploy
   deploy-vars:
-    description: Comma-separated variable-name globs that put a job on the deploy lane.
+    description: Comma-separated variable-name globs that put a job on the deploy lane (flavors as `<VAR>_<FLAVOR>`).
     required: false
-    default: LANE_TRUSTED_DEPLOY
+    default: LANE_TRUSTED_DEPLOY,LANE_TRUSTED_DEPLOY_*
   runner-inputs:
     description: >-
       Comma-separated `with:` input names a reusable-workflow caller passes

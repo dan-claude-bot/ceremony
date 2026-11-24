@@ -28,7 +28,7 @@ def expand:
   if test("^\\s*\\[") then (try (fromjson | if type == "array" then map(tostring) else [tostring] end) catch [.])
   else [.] end;
 
-def exprs: [match("\\$\\{\\{(.*?)\\}\\}"; "g") | .captures[0].string];
+def exprs: [match("\\$\\{\\{([\\s\\S]*?)\\}\\}"; "g") | .captures[0].string];
 def varsin:
   [match("(?:^|[^.A-Za-z0-9_])vars\\s*(?:\\.\\s*([A-Za-z_][A-Za-z0-9_]*)|\\[\\s*['\"]([^'\"]+)['\"]\\s*\\])"; "gi")
    | .captures[] | select(.string != null) | .string];
@@ -51,8 +51,13 @@ def classify($cfg):
       else label_lanes($cfg; "label") end ]
   | unique_by(.lane + .via);
 
-def unresolved:
-  [ .[] | expand[] | select(test("\\$\\{\\{")) | exprs[] | select((varsin | length) == 0 and (literals | length) == 0) | gsub("^\\s+|\\s+$"; "") ];
+def unresolved($cfg):
+  [ .[] | expand[] | select(test("\\$\\{\\{")) | exprs[] | select(([ "${{" + . + "}}" ] | classify($cfg) | length) == 0) | gsub("^\\s+|\\s+$"; "") ];
+# matrix.<key> in runs-on → the literal values strategy.matrix and its include give that key.
+def matrix_values($job):
+  [ match("(?:^|[^.A-Za-z0-9_])matrix\\s*\\.\\s*([A-Za-z0-9_-]+)"; "g") | .captures[0].string as $k
+    | ($job.strategy.matrix // {}) | if type == "object" then ((.[$k] // empty), ((.include // []) | if type == "array" then .[] | objects | .[$k] // empty else empty end)) else empty end
+    | strs[] ];
 
 def readonly:
   . == "read-all" or . == {} or (type == "object" and all(.[]; . == "read" or . == "none"));
@@ -69,9 +74,14 @@ def secret_refs:
       else "secrets.\($name)" end ]
   | unique;
 
-def docker_steps:
-  [ (.steps // [])[] | select((.run // "") | type == "string" and test("(^|[^A-Za-z0-9_.-])(docker|docker-compose)([^A-Za-z0-9_]|$)"))
-    | (.name // .id // (.run | split("\n")[0])) ];
+def dockery: type == "string" and test("(^|[^A-Za-z0-9_.-])(docker|docker-compose|podman|nerdctl|buildah)([^A-Za-z0-9_]|$)");
+def docker_steps($wf):
+  [ ((.steps // []) | if type == "array" then .[] else empty end | select(type == "object")
+     | select(((.run // "") | dockery) or ((.shell // "") | dockery))
+     | "step " + ((.name // .id // ((.run // .shell) | tostring | split("\n")[0])) | tostring)),
+    (if ((.defaults.run.shell // "") | dockery) then "job defaults.run.shell" else empty end),
+    (if (($wf.defaults.run.shell // "") | dockery) then "workflow defaults.run.shell" else empty end) ];
+def objsteps: (.steps // []) | if type == "array" then .[] | select(type == "object") else empty end;
 
 . as $wf
 | ($wf.jobs // {}) as $jobs
@@ -80,18 +90,18 @@ def docker_steps:
   | if ($job | type) != "object" then empty else
     ( if $mode == "callee" then
         # Only jobs routed through the caller's runner input inherit its lane.
-        if ([$job["runs-on"] | strs[] | select(test("(?:^|[^.A-Za-z0-9_])inputs\\s*\\.\\s*" + $input + "\\b"; "i"))] | length) > 0
+        if ([$job["runs-on"] | strs[] | select(test("(?:^|[^.A-Za-z0-9_])inputs\\s*\\.\\s*" + ($input | globre | ltrimstr("^") | rtrimstr("$")) + "\\b"; "i"))] | length) > 0
         then [{lane: $lane, via: "inputs.\($input) from its caller"}] else [] end
       elif ($job | has("uses")) then
         [ ($job.with // {}) | to_entries[] | select(.key as $k | $cfg.inputs | index($k)) | .value | strs[] ] | classify($cfg)
-      else ($job["runs-on"] | strs | classify($cfg)) end ) as $lanes
+      else ($job["runs-on"] | strs | (. + [.[] | matrix_values($job)[]]) | classify($cfg)) end ) as $lanes
     | ( if $mode == "callee" then []
-        elif ($job | has("uses")) then [ ($job.with // {}) | to_entries[] | select(.key as $k | $cfg.inputs | index($k)) | .value | strs[] ] | unresolved
-        else ($job["runs-on"] | strs | unresolved) end ) as $unres
+        elif ($job | has("uses")) then [ ($job.with // {}) | to_entries[] | select(.key as $k | $cfg.inputs | index($k)) | .value | strs[] ] | unresolved($cfg)
+        else (($job["runs-on"] | strs) as $ro | if ($ro + [$ro[] | matrix_values($job)[]] | classify($cfg) | length) > 0 then [] else ($ro | unresolved($cfg)) end) end ) as $unres
     | ($job | has("uses")) as $caller
     | (($job.with // {}) | if type == "object" then keys_unsorted else [] end | map(select(. as $k | $cfg.inputs | index($k))) | .[0] // $cfg.inputs[0]) as $inkey
     | (($job.uses // "") | tostring) as $callee
-    | ( ($unres[] | ["N", $id, "lane unresolved: ${{ \(.) }} names no lane variable or label"]),
+    | ( ($unres[] | ["N", $id, "lane unresolved: ${{ \(.) }} names no lane variable or label the guard can read"]),
         ( $lanes[] | ["L", $id, .lane, .via] ),
         ( $lanes | map(.lane) | unique[] as $l
           | if $l == "untrusted" then
@@ -105,10 +115,10 @@ def docker_steps:
               ( if $job | has("environment") then ["F", $id, $l, "sets environment: \($job.environment | if type == "string" then . else tojson end)"] else empty end ),
               ( if $caller and ($callee | startswith("./")) then ["C", $id, $l, $callee, $inkey] else empty end )
             else
-              ( (($job.steps // [])[] | select(has("uses")) | ["F", $id, $l, "has a uses: step (\(.uses)); the deploy lane runs bare run: steps only"]),
+              ( (($job | objsteps) | select(has("uses")) | ["F", $id, $l, "has a uses: step (\(.uses)); the deploy lane runs bare run: steps only"]),
                 (if $job | has("container") then ["F", $id, $l, "sets container:"] else empty end),
                 (if $job | has("services") then ["F", $id, $l, "sets services:"] else empty end),
-                (($job | docker_steps)[] | ["F", $id, $l, "invokes docker in run: (step \(.))"]),
+                (($job | docker_steps($wf))[] | ["F", $id, $l, "invokes a container tool (\(.))"]),
                 ( if $caller then
                     if ($callee | startswith("./")) then ["C", $id, $l, $callee, $inkey]
                     else ["F", $id, $l, "calls a remote reusable workflow (\($callee)) the guard cannot read; the deploy lane admits only steps it can see"] end

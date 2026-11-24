@@ -186,8 +186,8 @@ YAML
 check "deploy: actions/checkout fails" 1 "has a uses: step (actions/checkout@v4)" in_tree d-fail
 check "deploy: container: fails" 1 "sets container:" in_tree d-fail
 check "deploy: services: fails" 1 "sets services:" in_tree d-fail
-check "deploy: docker in run: fails" 1 "invokes docker in run: (step build)" in_tree d-fail
-check "deploy: docker-compose in run: fails" 1 "invokes docker in run: (step up)" in_tree d-fail
+check "deploy: docker in run: fails" 1 "invokes a container tool (step build)" in_tree d-fail
+check "deploy: docker-compose in run: fails" 1 "invokes a container tool (step up)" in_tree d-fail
 
 # --- reusable-workflow callers ------------------------------------------------
 
@@ -321,5 +321,66 @@ wf broken ci.yml <<'YAML'
 jobs: [unclosed
 YAML
 check "a file that does not parse fails" 1 "does not parse as YAML" in_tree broken
+
+# --- round 1 findings ---------------------------------------------------------
+
+wf r1 ci.yml <<'YAML'
+on: pull_request
+jobs:
+  multiline:
+    runs-on: >-
+      ${{
+      vars.LANE_UNTRUSTED }}
+    steps:
+      - run: echo
+  hidden:
+    runs-on: gig-untrusted
+    permissions: read-all
+    steps:
+      - run: "echo ${{\n secrets.Y }}"
+  shell:
+    runs-on: deploy-runner
+    steps:
+      - shell: docker run --rm alpine sh {0}
+        run: echo hi
+  flavor:
+    runs-on: ${{ vars.LANE_TRUSTED_DEPLOY_ARM }}
+    steps:
+      - uses: actions/checkout@v4
+  other:
+    runs-on: ${{ fromJSON(vars.RUNNERS).pr }}
+    steps:
+      - run: echo
+  matrix:
+    strategy:
+      matrix:
+        r: [gig-untrusted]
+    runs-on: ${{ matrix.r }}
+    steps:
+      - run: echo
+YAML
+check "r1: a multi-line expression still classifies" 1 "job multiline (untrusted lane) declares no permissions" in_tree r1
+check "r1: a multi-line secret reference is found" 1 "job hidden (untrusted lane) references secrets.Y" in_tree r1
+check "r1: docker as a step shell fails" 1 "job shell (deploy lane) invokes a container tool" in_tree r1
+check "r1: a deploy flavor variable is the deploy lane" 1 "job flavor (deploy lane) has a uses: step" in_tree r1
+check "r1: a non-lane variable is a NOTE" 1 "NOTE .github/workflows/ci.yml: job other lane unresolved" in_tree r1
+check "r1: a matrix key resolves to its literal labels" 1 "job matrix (untrusted lane) declares no permissions" in_tree r1
+
+wf r1-shape ci.yml <<'YAML'
+on: push
+jobs:
+  x:
+    runs-on: deploy-runner
+    steps: ["oops", {run: ls}]
+YAML
+wf r1-shape z.yml <<'YAML'
+on: push
+jobs:
+  y:
+    runs-on: deploy-runner
+    steps:
+      - uses: actions/checkout@v4
+YAML
+check "r1: a malformed step does not stop later files" 1 "job y (deploy lane) has a uses: step" in_tree r1-shape
 
 summary
