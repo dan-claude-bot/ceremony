@@ -88,6 +88,7 @@ jobs:
       - uses: ./actions/changelog-assembled
       - uses: ./actions/drill-recorded
       - uses: ./actions/runner-isolated
+      - uses: ./actions/runner-lanes
       - uses: ./actions/sha-pinned
         with:
           actions-dir: actions

@@ -312,6 +312,12 @@ EOF
   check "derive: sha-pinned's test is scope:guards" 0 "[scope:guards]" \
     derives 'test/sha-pinned.test.sh'
 
+  # #640 adds runner-lanes: its action and its test, each asserted alone.
+  check "derive: actions/runner-lanes is scope:guards" 0 "[scope:guards]" \
+    derives 'actions/runner-lanes/runner-lanes.sh'
+  check "derive: runner-lanes' test is scope:guards" 0 "[scope:guards]" \
+    derives 'test/runner-lanes.test.sh'
+
   # D4: lib/ is genuinely mixed, so the shared files wear both labels rather
   # than lib/** being re-carved into a row per file
   check "derive: lib/ruling.sh is release-flow AND labels" 0 \

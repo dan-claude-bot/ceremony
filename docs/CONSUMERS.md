@@ -242,6 +242,9 @@ the machinery at all:
        # refs.
        - uses: heavy-duty/ceremony/actions/runner-isolated@<pinned-tag>
        - uses: heavy-duty/ceremony/actions/sha-pinned@<pinned-tag>
+       # runner-lanes: adopt with the pin bump to the first release that
+       # carries it; never mix refs.
+       - uses: heavy-duty/ceremony/actions/runner-lanes@<pinned-tag>
    ```
 
    `changelog-armed` and `drill-recorded` take
@@ -284,6 +287,26 @@ the machinery at all:
    but name the wrong object. The trailing comment may be `# v4`, a full
    semantic version, or a date—the guard requires useful text but cannot
    prove that prose true.
+
+   `runner-lanes` checks the two lane rules where a consumer splits work
+   across runner lanes. Jobs on the **untrusted** lane declare
+   read-only `permissions:` (job level, or workflow level when the job sets
+   none), reference no secret but `GITHUB_TOKEN`, and set no
+   `environment:`: an untrusted guest must hold nothing worth stealing. Jobs
+   on the **deploy** lane run bare `run:` steps only — no `uses:` (checkout
+   included), no `container:`/`services:`, no `docker` — because anything
+   that pulls code or writes images fills or poisons the one persistent
+   guest. A job's lane is read from `runs-on:` either way it is routed: a
+   literal label (`untrusted-labels`, `deploy-labels`; defaults cover
+   today's `untrusted`/`pr-runner`/`deploy-runner` and gig's `gig-*`
+   labels) or a lane variable (`untrusted-vars`, `deploy-vars`; defaults
+   `LANE_UNTRUSTED`, `LANE_UNTRUSTED_*`, `LANE_TRUSTED_DEPLOY`) written as
+   `runs-on: ${{ vars.LANE_UNTRUSTED }}`. A reusable-workflow caller is
+   classified by its `runner` input (`runner-inputs`); a local callee is
+   followed one level, and a deploy-lane caller of a remote callee fails,
+   since its steps cannot be read. The trusted lane is not checked. The
+   guard needs `yq` (v4) and `jq` on the runner; the action's description
+   lists what it cannot see.
 
    `runner-isolated` asserts that no workflow file which **executes
    PR-authored code** names a self-hosted runner you have not vouched
