@@ -28,7 +28,9 @@ def expand:
   if test("^\\s*\\[") then (try (fromjson | if type == "array" then map(tostring) else [tostring] end) catch [.])
   else [.] end;
 
-def exprs: [match("\\$\\{\\{([\\s\\S]*?)\\}\\}"; "g") | .captures[0].string];
+# An expression runs to the first `}}` outside a '…' literal, so a literal
+# holding `}}` (format('}}', …)) does not end it early.
+def exprs: [match("\\$\\{\\{((?:[^'}]|'[^']*'|\\}(?!\\}))*)\\}\\}"; "g") | .captures[0].string];
 def varsin:
   [match("(?:^|[^.A-Za-z0-9_])vars\\s*(?:\\.\\s*([A-Za-z_][A-Za-z0-9_]*)|\\[\\s*['\"]([^'\"]+)['\"]\\s*\\])"; "gi")
    | .captures[] | select(.string != null) | .string];
@@ -59,6 +61,11 @@ def matrix_values($job):
     | ($job.strategy.matrix // {}) | if type == "object" then ((.[$k] // empty), ((.include // []) | if type == "array" then .[] | objects | .[$k] // empty else empty end)) else empty end
     | strs[] ];
 
+def inre($input): ($input | globre | ltrimstr("^") | rtrimstr("$")) as $n
+  | "(?:^|[^.A-Za-z0-9_])inputs\\s*(?:\\.\\s*" + $n + "|\\[\\s*['\"]" + $n + "['\"]\\s*\\])(?![A-Za-z0-9_-])";
+def runner_vals($job; $cfg): [ ($job.with // {}) | if type == "object" then to_entries[] else empty end | select(.key as $k | $cfg.inputs | index($k)) | .value | strs[] ];
+def all_with_vals($job): [ ($job.with // {}) | if type == "object" then to_entries[] else empty end | .value | strs[] ];
+
 def readonly:
   . == "read-all" or . == {} or (type == "object" and all(.[]; . == "read" or . == "none"));
 
@@ -74,13 +81,19 @@ def secret_refs:
       else "secrets.\($name)" end ]
   | unique;
 
-def dockery: type == "string" and test("(^|[^A-Za-z0-9_.-])(docker|docker-compose|podman|nerdctl|buildah)([^A-Za-z0-9_]|$)");
+# What a deploy-lane step may not do: run a container tool, or fetch code.
+def forbidden:
+  if type != "string" then empty else
+    [ match("(?:^|[^A-Za-z0-9_.-])(docker-compose|dockerd|docker|podman|nerdctl|buildah|containerd|ctr|crictl|skopeo|kubectl|incus|lxc)(?![A-Za-z0-9_])"; "g") | .captures[0].string ]
+    + [ match("(?:^|[^A-Za-z0-9_.-])(git\\s+(?:clone|fetch|pull))(?![A-Za-z0-9_-])"; "g") | .captures[0].string | gsub("\\s+"; " ") ]
+    + [ match("(?:^|[^A-Za-z0-9_.-])((?:curl|wget)(?![A-Za-z0-9_-])[^|\\n]*\\|\\s*(?:sudo\\s+)?(?:ba)?sh)(?![A-Za-z0-9_-])"; "g") | .captures[0].string | (if test("^curl") then "curl … | sh" else "wget … | sh" end) ]
+    | unique | .[] end;
 def docker_steps($wf):
-  [ ((.steps // []) | if type == "array" then .[] else empty end | select(type == "object")
-     | select(((.run // "") | dockery) or ((.shell // "") | dockery))
-     | "step " + ((.name // .id // ((.run // .shell) | tostring | split("\n")[0])) | tostring)),
-    (if ((.defaults.run.shell // "") | dockery) then "job defaults.run.shell" else empty end),
-    (if (($wf.defaults.run.shell // "") | dockery) then "workflow defaults.run.shell" else empty end) ];
+  [ ((.steps // []) | if type == "array" then to_entries[] else empty end | select(.value | type == "object")
+     | "step \(.key + 1)\(if (.value.name // .value.id) then " (\(.value.name // .value.id))" else "" end)" as $where | .value
+     | ((.run // null), (.shell // null)) | forbidden | "\(.) in \($where)"),
+    ((.defaults.run.shell // null) | forbidden | "\(.) in job defaults.run.shell"),
+    (($wf.defaults.run.shell // null) | forbidden | "\(.) in workflow defaults.run.shell") ];
 def objsteps: (.steps // []) | if type == "array" then .[] | select(type == "object") else empty end;
 
 . as $wf
@@ -88,20 +101,33 @@ def objsteps: (.steps // []) | if type == "array" then .[] | select(type == "obj
 | if ($jobs | type) != "object" then empty else
   $jobs | to_entries[] | .key as $id | .value as $job
   | if ($job | type) != "object" then empty else
-    ( if $mode == "callee" then
-        # Only jobs routed through the caller's runner input inherit its lane.
-        if ([$job["runs-on"] | strs[] | select(test("(?:^|[^.A-Za-z0-9_])inputs\\s*\\.\\s*" + ($input | globre | ltrimstr("^") | rtrimstr("$")) + "\\b"; "i"))] | length) > 0
-        then [{lane: $lane, via: "inputs.\($input) from its caller"}] else [] end
-      elif ($job | has("uses")) then
-        [ ($job.with // {}) | to_entries[] | select(.key as $k | $cfg.inputs | index($k)) | .value | strs[] ] | classify($cfg)
-      else ($job["runs-on"] | strs | (. + [.[] | matrix_values($job)[]]) | classify($cfg)) end ) as $lanes
+    ([$job["runs-on"] | strs[] | select(test(inre($input); "i"))] | length > 0) as $inherits
+    | (runner_vals($job; $cfg)) as $rv
+    | (if ($job | has("uses")) and ($rv | length) == 0 then all_with_vals($job) else $rv end) as $src
+    | ( if $mode == "callee" then
+          # Only jobs routed through the caller's runner input inherit its lane.
+          if $inherits then [{lane: $lane, via: "inputs.\($input) from its caller"}] else [] end
+        elif ($job | has("uses")) then $src | classify($cfg)
+        else ($job["runs-on"] | strs | (. + [.[] | matrix_values($job)[]]) | classify($cfg)) end ) as $lanes
     | ( if $mode == "callee" then []
-        elif ($job | has("uses")) then [ ($job.with // {}) | to_entries[] | select(.key as $k | $cfg.inputs | index($k)) | .value | strs[] ] | unresolved($cfg)
+        elif ($job | has("uses")) then (if ($lanes | length) > 0 then [] else $src | unresolved($cfg) end)
         else (($job["runs-on"] | strs) as $ro | if ($ro + [$ro[] | matrix_values($job)[]] | classify($cfg) | length) > 0 then [] else ($ro | unresolved($cfg)) end) end ) as $unres
+    | [ if $mode == "top" and ($job | has("runs-on") | not) and ($job | has("uses") | not) then
+          ["F", $id, "unknown", "has neither runs-on: nor uses:, so no lane can be read (an inline merge key the guard cannot resolve reads as an empty job)"]
+        elif $mode == "top" and ($job | has("uses")) and ($rv | length) == 0 and ($lanes | length) == 0 then
+          ["N", $id, "calls \($job.uses) with no runner input (\($cfg.inputs | join(", "))) and no lane in its with: values; its lane is not judged"]
+        elif $mode == "callee" and ($inherits | not) then
+          ( ($job["runs-on"] | strs) as $ro
+            | if ($ro | map(test("\\$\\{\\{")) | any) and (($ro + [$ro[] | matrix_values($job)[]]) | classify($cfg) | length) == 0 then
+                ["F", $id, $lane, "does not take its caller's \($lane) lane through inputs.\($input), and its own runs-on (\($ro | join(", "))) names no lane the guard can read"]
+              else ["N", $id, "runs on \($ro | join(", ")), not its caller's \($lane) lane; judged on its own"] end )
+        else empty end ] as $shape
+    | ($job | has("uses")) as $caller
     | ($job | has("uses")) as $caller
     | (($job.with // {}) | if type == "object" then keys_unsorted else [] end | map(select(. as $k | $cfg.inputs | index($k))) | .[0] // $cfg.inputs[0]) as $inkey
     | (($job.uses // "") | tostring) as $callee
-    | ( ($unres[] | ["N", $id, "lane unresolved: ${{ \(.) }} names no lane variable or label the guard can read"]),
+    | ( $shape[],
+        ($unres[] | ["N", $id, "lane unresolved: ${{ \(.) }} names no lane variable or label the guard can read"]),
         ( $lanes[] | ["L", $id, .lane, .via] ),
         ( $lanes | map(.lane) | unique[] as $l
           | if $l == "untrusted" then
@@ -118,7 +144,7 @@ def objsteps: (.steps // []) | if type == "array" then .[] | select(type == "obj
               ( (($job | objsteps) | select(has("uses")) | ["F", $id, $l, "has a uses: step (\(.uses)); the deploy lane runs bare run: steps only"]),
                 (if $job | has("container") then ["F", $id, $l, "sets container:"] else empty end),
                 (if $job | has("services") then ["F", $id, $l, "sets services:"] else empty end),
-                (($job | docker_steps($wf))[] | ["F", $id, $l, "invokes a container tool (\(.))"]),
+                (($job | docker_steps($wf))[] | ["F", $id, $l, "runs \(.); the deploy lane runs no container tool and fetches no code"]),
                 ( if $caller then
                     if ($callee | startswith("./")) then ["C", $id, $l, $callee, $inkey]
                     else ["F", $id, $l, "calls a remote reusable workflow (\($callee)) the guard cannot read; the deploy lane admits only steps it can see"] end

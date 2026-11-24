@@ -28,6 +28,10 @@ for tool in yq jq; do
 done
 
 if [ ! -d "$workflows_dir" ]; then
+  if [ "$workflows_dir" != .github/workflows ]; then
+    log "FAIL: workflows-dir $workflows_dir does not exist; only the default may be absent"
+    exit 1
+  fi
   log "no $workflows_dir — nothing to check"
   exit 0
 fi
@@ -42,9 +46,13 @@ cfg="$(jq -cn \
   --argjson dv "$(globs "${DEPLOY_VARS-LANE_TRUSTED_DEPLOY,LANE_TRUSTED_DEPLOY_*}")" \
   --argjson inputs "$(globs "${RUNNER_INPUTS-runner}")" \
   '{ul: $ul, uv: $uv, dl: $dl, dv: $dv, inputs: $inputs}')"
-if [ "$(jq -r '.inputs | length' <<<"$cfg")" -eq 0 ]; then
-  cfg="$(jq -c '.inputs = ["runner"]' <<<"$cfg")"
-fi
+# An empty set would silently turn its lane (or the caller reading) off: refuse it.
+for key in ul:untrusted-labels uv:untrusted-vars dl:deploy-labels dv:deploy-vars inputs:runner-inputs; do
+  if [ "$(jq -r --arg k "${key%%:*}" '.[$k] | length' <<<"$cfg")" -eq 0 ]; then
+    log "FAIL: input ${key#*:} is empty; it would switch that check off. Name at least one value."
+    exit 1
+  fi
+done
 
 # to_json <file> — the file as JSON, anchors resolved; non-zero on a parse error.
 to_json() { yq -o=json 'explode(.)' "$1" 2>&1; }

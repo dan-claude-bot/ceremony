@@ -5,8 +5,9 @@ description: >-
   read-only `permissions:` (job level, or workflow level when the job sets
   none), reference no `secrets.*` but `GITHUB_TOKEN` (workflow-level `env:`
   included), and set no `environment:`. Deploy-lane jobs have no `uses:`
-  steps (checkout included), no `container:`/`services:`, and no `docker`
-  in `run:`. A job's lane is read from its `runs-on:` (scalar, list, or the
+  steps (checkout included), no `container:`/`services:`, no container
+  tool and no code fetch (`git clone|fetch|pull`, `curl|wget … | sh`) in
+  `run:` or `shell:`. A job's lane is read from its `runs-on:` (scalar, list, or the
   `labels:`/`group:` of a mapping): a literal label matching a lane's label
   globs, or a `vars.<NAME>` reference matching a lane's variable globs, and
   a single-quoted literal inside an expression is read as a label too. A
@@ -14,7 +15,11 @@ description: >-
   reusable-workflow caller is classified by its runner input; an untrusted
   caller must hold read-only permissions and pass no secrets, a local
   callee (`./`) is followed one level and its jobs routed through
-  `inputs.<runner>` take the caller's lane, and a deploy-lane caller of a
+  `inputs.<runner>` (or `inputs['<runner>']`) take the caller's lane, a
+  callee job whose runs-on is an expression naming neither fails and one
+  on its own literal runner is a NOTE, a caller with no runner input is
+  read from all its `with:` values (a NOTE when none names a lane), a job
+  with neither `runs-on:` nor `uses:` fails, and a deploy-lane caller of a
   remote callee fails, since the guard cannot read its steps. A
   `matrix.<key>` in `runs-on:` is read from the literal values
   `strategy.matrix` and its `include:` give that key. Known gaps, so
@@ -23,12 +28,15 @@ description: >-
   and not judged, a
   remote callee on the untrusted lane is judged on the caller side only,
   callers inside a callee are not followed further, and container tools
-  (`docker`, `docker-compose`, `podman`, `nerdctl`, `buildah`) are matched
+  (`docker`, `docker-compose`, `dockerd`, `podman`, `nerdctl`, `buildah`,
+  `containerd`, `ctr`, `crictl`, `skopeo`, `kubectl`, `incus`, `lxc`) and
+  code fetches are matched
   lexically in `run:` and `shell:` text (step, job and workflow
   `defaults`), so an indirect or obfuscated call is not seen and a mention
   in an echo or comment fails. A `secrets.` inside an expression is judged
   a secret even inside a string literal: conservative by design. Needs `yq` (v4) and `jq` on the runner; a missing one fails.
-  A missing workflows directory passes.
+  A missing default workflows directory passes; a missing non-default
+  one fails, and an empty lane or runner input is refused.
 inputs:
   workflows-dir:
     description: Directory whose direct `*.yml`/`*.yaml` children are scanned.

